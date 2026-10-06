@@ -1,0 +1,58 @@
+name: test-install
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  unix:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build zip from kit/
+        run: |
+          mkdir -p pkg && cp -R kit pkg/workflow-starter-lite
+          (cd pkg && zip -qr ../kit.zip workflow-starter-lite)
+      - name: First install into a temp dir
+        run: |
+          bash install.sh --zip kit.zip --target "$RUNNER_TEMP/t1"
+          n=$(find "$RUNNER_TEMP/t1" -type f | wc -l)
+          echo "files: $n"
+          test "$n" -eq 13
+          test -f "$RUNNER_TEMP/t1/settings.kit-example.json"
+          test ! -f "$RUNNER_TEMP/t1/settings.json"
+      - name: Second install overwrites nothing
+        run: |
+          echo "mine" > "$RUNNER_TEMP/t1/commands/status.md"
+          bash install.sh --zip kit.zip --target "$RUNNER_TEMP/t1"
+          test "$(cat "$RUNNER_TEMP/t1/commands/status.md")" = "mine"
+          test -f "$RUNNER_TEMP/t1/commands/status.md.kit-new"
+      - name: Dry run writes nothing
+        run: |
+          bash install.sh --zip kit.zip --target "$RUNNER_TEMP/t2" --dry-run
+          test ! -e "$RUNNER_TEMP/t2"
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build zip from kit/
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory pkg | Out-Null
+          Copy-Item kit pkg/workflow-starter-lite -Recurse
+          Compress-Archive -Path pkg/workflow-starter-lite -DestinationPath kit.zip
+      - name: Install, re-install, dry run
+        shell: powershell
+        run: |
+          $t = Join-Path $env:RUNNER_TEMP "t1"
+          .\install.ps1 -ZipPath kit.zip -Target $t
+          $n = (Get-ChildItem $t -Recurse -File).Count
+          Write-Host "files: $n"
+          if ($n -ne 13) { throw "expected 13 files, got $n" }
+          if (Test-Path "$t\settings.json") { throw "settings.json must not be written" }
+          Set-Content "$t\commands\status.md" "mine"
+          .\install.ps1 -ZipPath kit.zip -Target $t
+          if ((Get-Content "$t\commands\status.md" -Raw).Trim() -ne "mine") { throw "overwrote an existing file" }
+          if (-not (Test-Path "$t\commands\status.md.kit-new")) { throw "missing .kit-new" }
+          $t2 = Join-Path $env:RUNNER_TEMP "t2"
+          .\install.ps1 -ZipPath kit.zip -Target $t2 -DryRun
+          if (Test-Path $t2) { throw "dry run wrote files" }
